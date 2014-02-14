@@ -1,6 +1,6 @@
 <?php
 
-require_once(MOLLOM_PATH . '/vendor/mollom/mollom/mollom.class.inc');
+require_once(BASE_PATH . '/vendor/mollom/client/mollom.class.inc');
 
 /**
  * A customized version of {@link Mollom} to run on SilverStripe. See the 
@@ -10,7 +10,21 @@ require_once(MOLLOM_PATH . '/vendor/mollom/mollom/mollom.class.inc');
  * @package mollom
  */
 
-class MollomSpamProtector extends Mollom implements SpamProtector {
+class MollomSpamProtector extends Mollom implements SpamProtector, SpamProtectorFeedback {
+	
+	/**
+	 * List of relevant spam detected fields
+	 * 
+	 * @var array
+	 * @config
+	 */
+	private static $mappable_fields = array(
+		'postTitle', // The title of the content.
+		'postBody', // The body of the content.
+		'authorName', //The name of the content author.
+		'authorUrl', // The homepage/website URL of the content author.
+		'authorMail', // The e-mail address of the content author.
+	);
 
 	/**
 	 * @var array
@@ -164,15 +178,22 @@ class MollomSpamProtector extends Mollom implements SpamProtector {
 
 		return (object) $response;
 	}
-
-	/**
-	 * Return the Field that we will use in this protector.
-	 * 
-	 * @return MollomField
-	 */
-	public function getFormField($name = "MollomField", $title = "Captcha", $value = null) {		
-		$field = new MollomField($name, $title, $value);
-
-		return $field;
+	
+	public function getFormField($name = "MollomField", $title = "Captcha", $value = null, $form = null, $rightTitle = null) {
+		return MollomField::create($name, $title, $value)
+			->setForm($form)
+			->setRightTitle($rightTitle);
 	}
+
+	public function sendObjectFeedback($object, $feedback) {
+		
+		// Send feedback for this object
+		if($object && !empty($object->SessionID)) {
+			return $this->sendFeedback(array(
+				'reason' => $feedback,
+				'contentId' => $object->SessionID
+			));
+		}
+	}
+
 }

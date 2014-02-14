@@ -9,7 +9,7 @@
  * @package mollom
  */
 
-class MollomField extends FormField {
+class MollomField extends SpamProtectorField {
 
 	/**
 	 * @config
