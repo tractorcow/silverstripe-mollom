@@ -12,16 +12,19 @@
 class MollomField extends SpamProtectorField {
 
 	/**
+	 * Determines if we should always show captcha on first load, rather than waiting for spam detection to trigger.
+	 * The captcha will only be hidden if the current user is exempt from spam detection.
+	 * 
 	 * @config
-	 *
-	 * @see setAlwaysShowCaptcha
+	 * @var boolean
 	 */
 	private static $always_show_captcha = false;
 	
 	/**
+	 * Determines if we should show captchas, even for logged in members.
+	 * 
 	 * @config
-	 *
-	 * @see setForceCheckOnMembers
+	 * @var boolean
 	 */
 	private static $force_check_on_members = false;
 	
@@ -59,6 +62,26 @@ class MollomField extends SpamProtectorField {
 
 		return null;
 	}
+	
+	/**
+	 * Determines if the current user is exempt from spam detection
+	 * 
+	 * @return boolean True if the user is exempt from spam detection
+	 */
+	protected function exemptUser() {
+		
+		// Never show captcha for admins
+		if(Permission::check('ADMIN')) {
+			return true;
+		}
+
+		// Allow logged in members to bypass captcha if allowed
+		if(Member::currentUser() && !Config::inst()->get('MollomField', 'force_check_on_members')) {
+			return true;
+		}
+		
+		return false;
+	}
 
 	/**
 	 * Return if we should show the captcha to the user.
@@ -66,20 +89,25 @@ class MollomField extends SpamProtectorField {
 	 * @return boolean
 	 */
 	public function getShowCaptcha() {
-		if(Permission::check('ADMIN')) {
-			return false; 
+		
+		// If this user is eligible to bypass spam detection, don't show them the recaptcha
+		if($this->exemptUser()) {
+			return false;
 		}
-
-		$requested = Session::get('mollom_captcha_requested');
-		$noMapping = ($this->getForm() && !$this->getForm()->hasSpamProtectionMapping());
-
-		if($requested || !$noMapping) {
-			if(!Member::currentUser() || !Config::inst()->get('MollomField', 'force_check_on_members')) {
-				return true;
-			}
+		
+		// Show captcha if always requested
+		if(Config::inst()->get('MollomField', 'always_show_captcha')) {
+			return true;
 		}
-
-		return (bool) Config::inst()->get('MollomField', 'always_show_captcha');
+		
+		// If a captcha is requested then we need to redisplay it to the user
+		if(Session::get('mollom_captcha_requested')) {
+			return true;
+		}
+		
+		// If there are no field mappings, then the only detection mechanism is a captcha
+		$hasMapping = $this->getFieldMapping();
+		return empty($hasMapping);
 	}
 	
 	/**
@@ -107,36 +135,32 @@ class MollomField extends SpamProtectorField {
 	 * @return boolean
 	 */
 	public function validate($validator) {	
-		if(Permission::check('ADMIN')) {
-			$this->clearMollomSession();
-
-			return true;
-		}	
 		
-		if(Member::currentUser() && !Config::inst()->get('MollomField', 'force_check_on_members')) {
+		// Bypass spam detection for eligible users
+		if($this->exemptUser()) {
 			$this->clearMollomSession();
-
 			return true;
 		}
 		
-		$session_id = Session::get("mollom_session_id");
-		$mapped = $this->getForm()->getSpamMappedData();
+		// Map all submitted values to mollom fields
+		$mapping = $this->getFieldMapping();
 		$data = array();
-
-		// prepare submission
-		foreach(array('authorName', 'authorUrl', 'authorMail', 'authorIp', 'authorId') as $k) {
-			if(isset($mapped[$k])) {
-				$data[$k] = $mapped[$k];
+		foreach($mapping as $formField => $mollomField) {
+			$value = $this->form->request->requestVar($formField);
+			if(!empty($value)) {
+				$data[$mollomField] = $value;
 			}
 		}
 
-		if($session_id) {
+		// Handle existing mollom session
+		if($sessionID = Session::get("mollom_session_id")) {
+			
 			// session ID exists so has been checked by captcha
-			$data['id'] = $session_id;
+			$data['id'] = $sessionID;
 			$data['solution'] = $this->Value();
-
 			$result = $this->getMollom()->checkCaptcha($data);
 
+			// Present result
 			if(is_array($result)) {
 				if($result['solved']) {
 					$this->clearMollomSession();
@@ -159,18 +183,7 @@ class MollomField extends SpamProtectorField {
 				}
 			}
 		} else {
-			$contentMap = array(
-				'id' => 'id',
-				'title' => 'postTitle',
-				'body' => 'postBody'
-			);
-
-			foreach($contentMap as $k => $v) {
-				if(isset($mapped[$k])) {
-					$data[$v] = $mapped[$k];
-				}
-			}
-
+			
 			$result = $this->getMollom()->checkContent($data);
 			
 			// Mollom can do much more useful things.
